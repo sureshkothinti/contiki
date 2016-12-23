@@ -41,6 +41,7 @@
 #define CC26XX_WEB_DEMO_CONF_6LBR_CLIENT      1
 #define CC26XX_WEB_DEMO_CONF_COAP_SERVER      1
 #define CC26XX_WEB_DEMO_CONF_NET_UART         1
+#define CC26XX_WEB_DEMO_CONF_COM_UART         0
 /*---------------------------------------------------------------------------*/
 /*
  * Shrink the size of the uIP buffer, routing table and ND cache.

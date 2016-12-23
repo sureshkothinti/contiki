@@ -47,6 +47,7 @@
 #include "net/ipv6/uip-ds6.h"
 #include "net/ipv6/uip-icmp6.h"
 #include "net/rpl/rpl-private.h"
+#include "net/rpl/rpl-ns.h"
 #include "net/ipv6/multicast/uip-mcast6.h"
 
 #define DEBUG DEBUG_NONE
@@ -113,7 +114,7 @@ rpl_purge_routes(void)
   uip_ds6_route_t *r;
   uip_ipaddr_t prefix;
   rpl_dag_t *dag;
-#if RPL_CONF_MULTICAST
+#if RPL_WITH_MULTICAST
   uip_mcast6_route_t *mcast_route;
 #endif
 
@@ -158,7 +159,7 @@ rpl_purge_routes(void)
     }
   }
 
-#if RPL_CONF_MULTICAST
+#if RPL_WITH_MULTICAST
   mcast_route = uip_mcast6_route_list_head();
 
   while(mcast_route != NULL) {
@@ -177,7 +178,7 @@ void
 rpl_remove_routes(rpl_dag_t *dag)
 {
   uip_ds6_route_t *r;
-#if RPL_CONF_MULTICAST
+#if RPL_WITH_MULTICAST
   uip_mcast6_route_t *mcast_route;
 #endif
 
@@ -192,7 +193,7 @@ rpl_remove_routes(rpl_dag_t *dag)
     }
   }
 
-#if RPL_CONF_MULTICAST
+#if RPL_WITH_MULTICAST
   mcast_route = uip_mcast6_route_list_head();
 
   while(mcast_route != NULL) {
@@ -344,6 +345,10 @@ rpl_init(void)
 #if RPL_CONF_STATS
   memset(&rpl_stats, 0, sizeof(rpl_stats));
 #endif
+
+#if RPL_WITH_NON_STORING
+  rpl_ns_init();
+#endif /* RPL_WITH_NON_STORING */
 }
 /*---------------------------------------------------------------------------*/
 

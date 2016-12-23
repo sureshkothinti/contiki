@@ -330,6 +330,9 @@ cc26xx_web_demo_restore_defaults(void)
 #if CC26XX_WEB_DEMO_NET_UART
   process_post_synch(&net_uart_process, cc26xx_web_demo_load_config_defaults,
                      NULL);
+#elif CC26XX_WEB_DEMO_COM_UART
+  process_post_synch(&com_uart_process, cc26xx_web_demo_load_config_defaults,
+                     NULL);
 #endif
 
   save_config();
@@ -878,6 +881,8 @@ PROCESS_THREAD(cc26xx_web_demo_process, ev, data)
 
 #if CC26XX_WEB_DEMO_NET_UART
   process_start(&net_uart_process, NULL);
+#elif CC26XX_WEB_DEMO_COM_UART
+  process_start(&com_uart_process, NULL);
 #endif
 
   /*

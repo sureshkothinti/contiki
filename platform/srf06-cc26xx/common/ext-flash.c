@@ -51,7 +51,7 @@
 #define BLS_CODE_READ_STATUS      0x05 /**< Read Status Register */
 #define BLS_CODE_WRITE_ENABLE     0x06 /**< Write Enable */
 #define BLS_CODE_SECTOR_ERASE     0x20 /**< Sector Erase */
-#define BLS_CODE_MDID             0x90 /**< Manufacturer Device ID */
+#define BLS_CODE_MDID             0x9F /**< Manufacturer Device ID */
 
 #define BLS_CODE_PD               0xB9 /**< Power down */
 #define BLS_CODE_RPD              0xAB /**< Release Power-Down */
@@ -77,7 +77,6 @@
 #define BLS_DEVICE_ID_W25X40CL    0x12
 #define BLS_DEVICE_ID_MX25R8035F  0x14
 #define BLS_DEVICE_ID_MX25R1635F  0x15
-
 #define BLS_WINBOND_MID           0xEF
 #define BLS_MACRONIX_MID          0xC2
 
@@ -161,7 +160,7 @@ wait_ready(void)
 static uint8_t
 verify_part(void)
 {
-  const uint8_t wbuf[] = { BLS_CODE_MDID, 0xFF, 0xFF, 0x00 };
+  const uint8_t wbuf[] = { BLS_CODE_MDID };
   uint8_t rbuf[2] = { 0, 0 };
   bool ret;
 

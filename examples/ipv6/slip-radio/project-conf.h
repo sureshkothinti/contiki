@@ -33,8 +33,7 @@
 #undef QUEUEBUF_CONF_NUM
 #define QUEUEBUF_CONF_NUM          4
 
-#undef UIP_CONF_BUFFER_SIZE
-#define UIP_CONF_BUFFER_SIZE    140
+
 
 #undef UIP_CONF_ROUTER
 #define UIP_CONF_ROUTER                 0

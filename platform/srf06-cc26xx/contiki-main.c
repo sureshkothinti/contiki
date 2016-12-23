@@ -59,6 +59,8 @@
 #include "uart.h"
 #include "sys/clock.h"
 #include "sys/rtimer.h"
+#include "sys/node-id.h"
+#include "lib/random.h"
 #include "lib/sensors.h"
 #include "button-sensor.h"
 #include "dev/serial-line.h"
@@ -67,6 +69,8 @@
 #include "driverlib/driverlib_release.h"
 
 #include <stdio.h>
+/*---------------------------------------------------------------------------*/
+unsigned short node_id = 0;
 /*---------------------------------------------------------------------------*/
 /** \brief Board specific iniatialisation */
 void board_init(void);
@@ -123,6 +127,10 @@ set_rf_params(void)
     printf("%02x\n", linkaddr_node_addr.u8[i]);
   }
 #endif
+
+  /* also set the global node id */
+  node_id = short_addr;
+  printf(" Node ID: %d\n", node_id);
 }
 /*---------------------------------------------------------------------------*/
 /**
@@ -133,11 +141,6 @@ set_rf_params(void)
 int
 main(void)
 {
-  #if OTA
-  //  OTA firmware VTOR table address must be specified, it is not 0x00000000.
-  HWREG(NVIC_VTABLE) = OTA_IMAGE_OFFSET + OTA_METADATA_SPACE;
-  #endif
-
   /* Enable flash cache and prefetch. */
   ti_lib_vims_mode_set(VIMS_BASE, VIMS_MODE_ENABLED);
   ti_lib_vims_configure(VIMS_BASE, true, true);
@@ -217,12 +220,12 @@ main(void)
   memcpy(&uip_lladdr.addr, &linkaddr_node_addr, sizeof(uip_lladdr.addr));
   queuebuf_init();
   process_start(&tcpip_process, NULL);
-#endif
-
+#endif /* NETSTACK_CONF_WITH_IPV6 */
 
   fade(LEDS_GREEN);
 
   process_start(&sensors_process, NULL);
+
   autostart_start(autostart_processes);
 
   watchdog_start();

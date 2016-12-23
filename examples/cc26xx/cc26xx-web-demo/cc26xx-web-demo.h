@@ -52,8 +52,8 @@
 #include "dev/leds.h"
 #include "sys/process.h"
 #include "mqtt-client.h"
+#include "com-uart.h"
 #include "net-uart.h"
-
 #include <stdint.h>
 /*---------------------------------------------------------------------------*/
 #ifdef CC26XX_WEB_DEMO_CONF_MQTT_CLIENT

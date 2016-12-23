@@ -113,6 +113,19 @@
 #define BOARD_UART_TX             (1 << BOARD_IOID_UART_TX)
 #define BOARD_UART_CTS            (1 << BOARD_IOID_UART_CTS)
 #define BOARD_UART_RTS            (1 << BOARD_IOID_UART_RTS)
+
+/** @} */
+/*---------------------------------------------------------------------------*/
+/**
+ * \name I2C IOID mapping
+ *
+ * Those values are not meant to be modified by the user
+ * @{
+ */
+#define BOARD_IOID_SDA            IOID_5 /**< Interface 0 SDA: All sensors bar MPU */
+#define BOARD_IOID_SCL            IOID_6 /**< Interface 0 SCL: All sensors bar MPU */
+#define BOARD_IOID_SDA_HP         IOID_18/**< Interface 1 SDA: MPU */
+#define BOARD_IOID_SCL_HP         IOID_19 /**< Interface 1 SCL: MPU */
 /** @} */
 /*---------------------------------------------------------------------------*/
 /**
@@ -149,7 +162,11 @@
  * Those values are not meant to be modified by the user
  * @{
  */
-#define BOARD_IOID_SPI_SCK        IOID_10
+ #define BOARD_IOID_FLASH_CS       IOID_14
+#define BOARD_FLASH_CS            (1 << BOARD_IOID_FLASH_CS)
+#define BOARD_IOID_SPI_CLK_FLASH  IOID_10
+
+//#define BOARD_IOID_SPI_SCK        IOID_10
 #define BOARD_IOID_SPI_MOSI       IOID_9
 #define BOARD_IOID_SPI_MISO       IOID_8
 #define BOARD_SPI_SCK             (1 << BOARD_IOID_SPI_SCK)

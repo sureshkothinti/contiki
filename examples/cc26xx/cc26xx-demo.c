@@ -95,346 +95,388 @@
 #include "batmon-sensor.h"
 #include "board-peripherals.h"
 #include "rf-core/rf-ble.h"
-
+#include "driverlib/flash.h"
+#include "driverlib/cpu.h"
+#include "dev/serial-line.h"
+#include "dev/cc26xx-uart.h"
+#include "VCBinary.h"
+#include "aes256.h"
+#include "base64.h"
+#include "board-i2c.h"
+#include "board-spi.h"
+#include "ext-flash.h"
 #include "ti-lib.h"
-
+#include "rtc.h"
 #include <stdio.h>
 #include <stdint.h>
-/*---------------------------------------------------------------------------*/
-#define CC26XX_DEMO_LOOP_INTERVAL       (CLOCK_SECOND * 20)
-#define CC26XX_DEMO_LEDS_PERIODIC       LEDS_YELLOW
-#define CC26XX_DEMO_LEDS_BUTTON         LEDS_RED
-#define CC26XX_DEMO_LEDS_REBOOT         LEDS_ALL
-/*---------------------------------------------------------------------------*/
-#define CC26XX_DEMO_SENSOR_NONE         (void *)0xFFFFFFFF
 
-#define CC26XX_DEMO_SENSOR_1     &button_left_sensor
-#define CC26XX_DEMO_SENSOR_2     &button_right_sensor
-
-#if BOARD_SENSORTAG
-#define CC26XX_DEMO_SENSOR_3     CC26XX_DEMO_SENSOR_NONE
-#define CC26XX_DEMO_SENSOR_4     CC26XX_DEMO_SENSOR_NONE
-#define CC26XX_DEMO_SENSOR_5     &reed_relay_sensor
-#elif BOARD_LAUNCHPAD
-#define CC26XX_DEMO_SENSOR_3     CC26XX_DEMO_SENSOR_NONE
-#define CC26XX_DEMO_SENSOR_4     CC26XX_DEMO_SENSOR_NONE
-#define CC26XX_DEMO_SENSOR_5     CC26XX_DEMO_SENSOR_NONE
-#else
-#define CC26XX_DEMO_SENSOR_3     &button_up_sensor
-#define CC26XX_DEMO_SENSOR_4     &button_down_sensor
-#define CC26XX_DEMO_SENSOR_5     &button_select_sensor
-#endif
 /*---------------------------------------------------------------------------*/
 static struct etimer et;
 /*---------------------------------------------------------------------------*/
 PROCESS(cc26xx_demo_process, "cc26xx demo process");
 AUTOSTART_PROCESSES(&cc26xx_demo_process);
 /*---------------------------------------------------------------------------*/
-#if BOARD_SENSORTAG
-/*---------------------------------------------------------------------------*/
-/*
- * Update sensor readings in a staggered fashion every SENSOR_READING_PERIOD
- * ticks + a random interval between 0 and SENSOR_READING_RANDOM ticks
- */
-#define SENSOR_READING_PERIOD (CLOCK_SECOND * 20)
-#define SENSOR_READING_RANDOM (CLOCK_SECOND << 4)
 
-static struct ctimer bmp_timer, opt_timer, hdc_timer, tmp_timer, mpu_timer;
-/*---------------------------------------------------------------------------*/
-static void init_bmp_reading(void *not_used);
-static void init_opt_reading(void *not_used);
-static void init_hdc_reading(void *not_used);
-static void init_tmp_reading(void *not_used);
-static void init_mpu_reading(void *not_used);
-/*---------------------------------------------------------------------------*/
-static void
-print_mpu_reading(int reading)
+#define ENCRYPT 1
+#define DECRYPT 0
+
+void FlashRead(uint8_t *pui8DataBuffer,uint32_t ui32Address,uint32_t ui32Count)
 {
-  if(reading < 0) {
-    printf("-");
-    reading = -reading;
+  uint8_t *pui8ReadAdress =(uint8_t *)ui32Address;
+  while(ui32Count --)
+  {
+    *pui8DataBuffer++ = *pui8ReadAdress++;
   }
-
-  printf("%d.%02d", reading / 100, reading % 100);
 }
-/*---------------------------------------------------------------------------*/
-static void
-get_bmp_reading()
+
+void WriteConfigData(uint32_t addr)
 {
-  int value;
-  clock_time_t next = SENSOR_READING_PERIOD +
-    (random_rand() % SENSOR_READING_RANDOM);
-
-  value = bmp_280_sensor.value(BMP_280_SENSOR_TYPE_PRESS);
-  if(value != CC26XX_SENSOR_READING_ERROR) {
-    printf("BAR: Pressure=%d.%02d hPa\n", value / 100, value % 100);
-  } else {
-    printf("BAR: Pressure Read Error\n");
-  }
-
-  value = bmp_280_sensor.value(BMP_280_SENSOR_TYPE_TEMP);
-  if(value != CC26XX_SENSOR_READING_ERROR) {
-    printf("BAR: Temp=%d.%02d C\n", value / 100, value % 100);
-  } else {
-    printf("BAR: Temperature Read Error\n");
-  }
-
-  SENSORS_DEACTIVATE(bmp_280_sensor);
-
-  ctimer_set(&bmp_timer, next, init_bmp_reading, NULL);
+  uint8_t buf[4];
+  unsigned int res;
+  char data[128];
+  FlashRead(buf,0x1E000,4);
+  strcpy(data,"AA55");
+  res = memcmp(buf,data,4);
+  if(res != 0 ) {
+    strcpy(data+4,"11223344");
+    strcpy(data+12,"UNK 180820168872");
+    strcpy(data+28,"B374A26A71490437AA024E4FADD5B497FDFF1A8EA6FF12F6FB65AF2720B59CCF");
+    FlashProgram((uint8_t *)data,addr,128);
+    CPUdelay(10000);
+  } 
 }
-/*---------------------------------------------------------------------------*/
-static void
-get_tmp_reading()
+unsigned char key[32] = { 0x3e, 0xc8, 0x7b, 0x95, 0x59, 0xc1, 0x21, 0x1f, 
+                          0x6c, 0xa6, 0x55, 0x0a, 0x99, 0xf3, 0xc9, 0xfd, 
+                          0x64, 0xb3, 0x3f, 0xa5, 0x57, 0x2a, 0x0f, 0x61, 
+                          0xf4, 0x66, 0x67, 0xc0, 0xbb, 0x6d, 0x98, 0x85 };
+
+int cipher(uint8_t type, uint8_t *key, uint8_t *buff)
 {
-  int value;
-  clock_time_t next = SENSOR_READING_PERIOD +
-    (random_rand() % SENSOR_READING_RANDOM);
+	int i;
+	aes256_context ctx;
+	aes256_init(&ctx, key);
+	if (type == ENCRYPT)
+	{
+		for (i = 0; i < 96/ 16; i++)
+		{
 
-  value = tmp_007_sensor.value(TMP_007_SENSOR_TYPE_ALL);
-
-  if(value == CC26XX_SENSOR_READING_ERROR) {
-    printf("TMP: Ambient Read Error\n");
-    return;
-  }
-
-  value = tmp_007_sensor.value(TMP_007_SENSOR_TYPE_AMBIENT);
-  printf("TMP: Ambient=%d.%03d C\n", value / 1000, value % 1000);
-
-  value = tmp_007_sensor.value(TMP_007_SENSOR_TYPE_OBJECT);
-  printf("TMP: Object=%d.%03d C\n", value / 1000, value % 1000);
-
-  SENSORS_DEACTIVATE(tmp_007_sensor);
-
-  ctimer_set(&tmp_timer, next, init_tmp_reading, NULL);
+			aes256_encrypt_ecb(&ctx, buff  + i * 16);
+		}
+	}
+	else {
+		for (i = 0; i < 96 / 16; i++)
+		{
+			aes256_decrypt_ecb(&ctx, buff + i * 16);
+		}
+	}
+	aes256_done(&ctx);
+	return 0;
 }
-/*---------------------------------------------------------------------------*/
-static void
-get_hdc_reading()
-{
-  int value;
-  clock_time_t next = SENSOR_READING_PERIOD +
-    (random_rand() % SENSOR_READING_RANDOM);
-
-  value = hdc_1000_sensor.value(HDC_1000_SENSOR_TYPE_TEMP);
-  if(value != CC26XX_SENSOR_READING_ERROR) {
-    printf("HDC: Temp=%d.%02d C\n", value / 100, value % 100);
-  } else {
-    printf("HDC: Temp Read Error\n");
-  }
-
-  value = hdc_1000_sensor.value(HDC_1000_SENSOR_TYPE_HUMIDITY);
-  if(value != CC26XX_SENSOR_READING_ERROR) {
-    printf("HDC: Humidity=%d.%02d %%RH\n", value / 100, value % 100);
-  } else {
-    printf("HDC: Humidity Read Error\n");
-  }
-
-  ctimer_set(&hdc_timer, next, init_hdc_reading, NULL);
-}
-/*---------------------------------------------------------------------------*/
-static void
-get_light_reading()
-{
-  int value;
-  clock_time_t next = SENSOR_READING_PERIOD +
-    (random_rand() % SENSOR_READING_RANDOM);
-
-  value = opt_3001_sensor.value(0);
-  if(value != CC26XX_SENSOR_READING_ERROR) {
-    printf("OPT: Light=%d.%02d lux\n", value / 100, value % 100);
-  } else {
-    printf("OPT: Light Read Error\n");
-  }
-
-  /* The OPT will turn itself off, so we don't need to call its DEACTIVATE */
-  ctimer_set(&opt_timer, next, init_opt_reading, NULL);
-}
-/*---------------------------------------------------------------------------*/
-static void
-get_mpu_reading()
-{
-  int value;
-  clock_time_t next = SENSOR_READING_PERIOD +
-    (random_rand() % SENSOR_READING_RANDOM);
-
-  printf("MPU Gyro: X=");
-  value = mpu_9250_sensor.value(MPU_9250_SENSOR_TYPE_GYRO_X);
-  print_mpu_reading(value);
-  printf(" deg/sec\n");
-
-  printf("MPU Gyro: Y=");
-  value = mpu_9250_sensor.value(MPU_9250_SENSOR_TYPE_GYRO_Y);
-  print_mpu_reading(value);
-  printf(" deg/sec\n");
-
-  printf("MPU Gyro: Z=");
-  value = mpu_9250_sensor.value(MPU_9250_SENSOR_TYPE_GYRO_Z);
-  print_mpu_reading(value);
-  printf(" deg/sec\n");
-
-  printf("MPU Acc: X=");
-  value = mpu_9250_sensor.value(MPU_9250_SENSOR_TYPE_ACC_X);
-  print_mpu_reading(value);
-  printf(" G\n");
-
-  printf("MPU Acc: Y=");
-  value = mpu_9250_sensor.value(MPU_9250_SENSOR_TYPE_ACC_Y);
-  print_mpu_reading(value);
-  printf(" G\n");
-
-  printf("MPU Acc: Z=");
-  value = mpu_9250_sensor.value(MPU_9250_SENSOR_TYPE_ACC_Z);
-  print_mpu_reading(value);
-  printf(" G\n");
-
-  SENSORS_DEACTIVATE(mpu_9250_sensor);
-
-  ctimer_set(&mpu_timer, next, init_mpu_reading, NULL);
-}
-/*---------------------------------------------------------------------------*/
-static void
-init_bmp_reading(void *not_used)
-{
-  SENSORS_ACTIVATE(bmp_280_sensor);
-}
-/*---------------------------------------------------------------------------*/
-static void
-init_opt_reading(void *not_used)
-{
-  SENSORS_ACTIVATE(opt_3001_sensor);
-}
-/*---------------------------------------------------------------------------*/
-static void
-init_hdc_reading(void *not_used)
-{
-  SENSORS_ACTIVATE(hdc_1000_sensor);
-}
-/*---------------------------------------------------------------------------*/
-static void
-init_tmp_reading(void *not_used)
-{
-  SENSORS_ACTIVATE(tmp_007_sensor);
-}
-/*---------------------------------------------------------------------------*/
-static void
-init_mpu_reading(void *not_used)
-{
-  mpu_9250_sensor.configure(SENSORS_ACTIVE, MPU_9250_SENSOR_TYPE_ALL);
-}
-#endif
-/*---------------------------------------------------------------------------*/
-static void
-get_sync_sensor_readings(void)
-{
-  int value;
-
-  printf("-----------------------------------------\n");
-
-  value = batmon_sensor.value(BATMON_SENSOR_TYPE_TEMP);
-  printf("Bat: Temp=%d C\n", value);
-
-  value = batmon_sensor.value(BATMON_SENSOR_TYPE_VOLT);
-  printf("Bat: Volt=%d mV\n", (value * 125) >> 5);
-
-  return;
-}
-/*---------------------------------------------------------------------------*/
-static void
-init_sensors(void)
-{
-#if BOARD_SENSORTAG
-  SENSORS_ACTIVATE(reed_relay_sensor);
-#endif
-
-  SENSORS_ACTIVATE(batmon_sensor);
-}
-/*---------------------------------------------------------------------------*/
-static void
-init_sensor_readings(void)
-{
-#if BOARD_SENSORTAG
-  SENSORS_ACTIVATE(hdc_1000_sensor);
-  SENSORS_ACTIVATE(tmp_007_sensor);
-  SENSORS_ACTIVATE(opt_3001_sensor);
-  SENSORS_ACTIVATE(bmp_280_sensor);
-
-  init_mpu_reading(NULL);
-#endif
-}
+uint8_t tempData[96];
+uint8_t tempData2[192];
+uint8_t tempwd[10];
+uint8_t pwdRead[10];
+uint8_t temp[96];
+uint8_t rdata[128];
+char edata[270]; //130
 /*---------------------------------------------------------------------------*/
 PROCESS_THREAD(cc26xx_demo_process, ev, data)
 {
+ 
+ uint8_t  loop = 0;
 
+ uint8_t  i =0;
+ uint32_t res;
+ static uint8_t  pflag = 0;
+ size_t decodeLen= 264;
+ uint32_t configPageAddress = (unsigned int )0x1E000;
+ uint8_t buff[4];
+ uint8_t time[3];
+ uint8_t date,month,year;
   PROCESS_BEGIN();
+  
+  WriteConfigData(configPageAddress);
 
-  printf("CC26XX demo\n");
-
-  init_sensors();
-
-  /* Init the BLE advertisement daemon */
-  rf_ble_beacond_config(0, BOARD_STRING);
-  rf_ble_beacond_start();
-
-  etimer_set(&et, CC26XX_DEMO_LOOP_INTERVAL);
-  get_sync_sensor_readings();
-  init_sensor_readings();
-
+  cc26xx_uart_set_input(serial_line_input_byte);
+  memset(tempData,0,96);
+  memset(tempData2,0,192);
+   memset(edata,0,270);
+   etimer_set(&et, CLOCK_SECOND);
   while(1) {
 
     PROCESS_YIELD();
-
-    if(ev == PROCESS_EVENT_TIMER) {
-      if(data == &et) {
-        leds_toggle(CC26XX_DEMO_LEDS_PERIODIC);
-
-        get_sync_sensor_readings();
-
-        etimer_set(&et, CC26XX_DEMO_LOOP_INTERVAL);
-      }
-    } else if(ev == sensors_event) {
-      if(data == CC26XX_DEMO_SENSOR_1) {
-        printf("Left: Pin %d, press duration %d clock ticks\n",
-               (CC26XX_DEMO_SENSOR_1)->value(BUTTON_SENSOR_VALUE_STATE),
-               (CC26XX_DEMO_SENSOR_1)->value(BUTTON_SENSOR_VALUE_DURATION));
-
-        if((CC26XX_DEMO_SENSOR_1)->value(BUTTON_SENSOR_VALUE_DURATION) >
-           CLOCK_SECOND) {
-          printf("Long button press!\n");
-        }
-
-        leds_toggle(CC26XX_DEMO_LEDS_BUTTON);
-      } else if(data == CC26XX_DEMO_SENSOR_2) {
-        leds_on(CC26XX_DEMO_LEDS_REBOOT);
-        watchdog_reboot();
-      } else if(data == CC26XX_DEMO_SENSOR_3) {
-        printf("Up\n");
-      } else if(data == CC26XX_DEMO_SENSOR_4) {
-        printf("Down\n");
-      } else if(data == CC26XX_DEMO_SENSOR_5) {
-#if BOARD_SENSORTAG
-        if(buzzer_state()) {
-          buzzer_stop();
-        } else {
-          buzzer_start(1000);
-        }
-      } else if(ev == sensors_event && data == &bmp_280_sensor) {
-        get_bmp_reading();
-      } else if(ev == sensors_event && data == &opt_3001_sensor) {
-        get_light_reading();
-      } else if(ev == sensors_event && data == &hdc_1000_sensor) {
-        get_hdc_reading();
-      } else if(ev == sensors_event && data == &tmp_007_sensor) {
-        get_tmp_reading();
-      } else if(ev == sensors_event && data == &mpu_9250_sensor) {
-        get_mpu_reading();
-#elif BOARD_SMARTRF06EB
-        printf("Sel: Pin %d, press duration %d clock ticks\n",
-               button_select_sensor.value(BUTTON_SENSOR_VALUE_STATE),
-               button_select_sensor.value(BUTTON_SENSOR_VALUE_DURATION));
-#endif
-      }
+    if(ev ==PROCESS_EVENT_TIMER )
+    {
+      rtc_get_date(&date,1);
+      rtc_get_month(&month,1);
+      rtc_get_year(&year,1);
+      printf("%x/%x/%x ",date,month,year);
+      rtc_get_time(time,3);
+       printf("%x:%x:%x\n",time[2],time[1],time[0]);
+       etimer_set(&et, CLOCK_SECOND);
     }
+
+    if(ev == serial_line_event_message) {
+      /*rtc_read_ids(buff,6);
+      printf("ID %x %x %x %x %x %x",buff[0],buff[1],buff[2],buff[3],buff[4],buff[5]);*/ 
+      
+      rtc_set_date(0x23,1);
+      rtc_set_month(0x12,1);
+      rtc_set_year(0x16,1);
+      rtc_set_seconds(0x00,1);
+      rtc_set_minutes(0x05,1);
+      rtc_set_hours(0x18,1);
+      rtc_read_status_reg(buff,1);
+      printf("%x\n",buff[0]);
+             /*printf("success");
+       res = ext_flash_open();
+       if(res)
+       {
+         printf("part ok");
+       }else{
+         printf("part fail");
+       }
+       res = ext_flash_write(0x00, 4, "test");
+       if(res)
+       {
+         printf("flash write successful\n");
+         res = ext_flash_read(0x00,4,buff);
+         printf("%s\n",buff);
+       }*/
+        #if 0
+        strcpy(edata,data);
+        base64_decode(tempData2, &decodeLen,edata,strlen(edata));
+        JoinShares(tempData,96,tempData2,(tempData2+96));
+        
+        if(tempData[0] == '<')
+        {
+          switch(tempData[1])
+          {
+              case 'S':
+                memset(rdata,0xFF,128);
+                FlashRead(rdata,configPageAddress,128);
+                res = FlashSectorErase(configPageAddress);
+                if(res == 0)
+                {
+                  switch(tempData[2])
+                  {
+                    case 'K':
+                    memset(temp,0,96);
+                    memset(edata,0,130);
+                    if(pflag){
+                      i = 28;
+                      for(loop = 4; tempData[loop] != '>'; loop++)
+                      {
+                        
+                        rdata[i++] = tempData[loop];
+                      }
+                      res = FlashProgram(rdata, configPageAddress,128);
+                      CPUdelay(1000);
+                      if( res== 0)
+                      {
+                        sprintf((char*)temp,"%s","<SK,0>");
+                        //cipher(ENCRYPT,key,temp);
+                        CreateShares(temp,96,tempData2,(tempData2+96));
+                        base64_encode(edata,262,tempData2,192);
+                        printf("%s",edata);
+                        printf("\r\n");
+                      }else{
+                        sprintf((char*)temp,"%s","<SK,2>");
+                        //cipher(ENCRYPT,key,temp);
+                        CreateShares(temp,96,tempData2,(tempData2+96));
+                        base64_encode(edata,262,tempData2,192);
+                        printf("%s",edata);
+                        printf("\r\n");
+                      } 
+                    }else{
+                        sprintf((char*)temp,"%s","<SK,1>");
+                        //cipher(ENCRYPT,key,temp);
+                        CreateShares(temp,96,tempData2,(tempData2+96));
+                        base64_encode(edata,262,tempData2,192);
+                        printf("%s",edata);
+                        printf("\r\n");
+                    }                  
+                    break;
+                    case 'U':
+                      memset(temp,0,96);
+                      memset(edata,0,130);
+                      i = 12;
+                      for(loop = 4;loop < 21;loop++)
+                      {
+                        
+                        rdata[i++] = tempData[loop];
+                      }
+                      res = FlashProgram(rdata, configPageAddress,128);
+                      CPUdelay(1000);
+                      if( res == 0)
+                      {
+                        sprintf((char*)temp,"%s","<SU,0>");
+                        //cipher(ENCRYPT,key,temp);
+                        CreateShares(temp,96,tempData2,(tempData2+96));
+                        base64_encode(edata,262,tempData2,192);
+                        printf("%s",edata);
+                        printf("\r\n");
+                      }else{
+                        sprintf((char*)temp,"%s","<SU,1>");
+                        //cipher(ENCRYPT,key,temp);
+                        CreateShares(temp,96,tempData2,(tempData2+96));
+                        base64_encode(edata,262,tempData2,192);
+                        printf("%s",edata);
+                        printf("\r\n");
+                      }                    
+                    break;
+                    case 'P':
+                      memset(temp,0,96);
+                      memset(edata,0,130);
+                      memset(tempwd,0x00,10);
+                      memset(pwdRead,0x00,10);
+                      for(loop = 4;tempData[loop] != ':';loop++)
+                      {
+                        tempwd[loop -4] = tempData[loop];
+                      }
+                      FlashRead(pwdRead,(configPageAddress+0x04),8);
+                      res = memcmp(tempwd,pwdRead,8);
+                      if(res == 0)
+                      {
+                        i = 4;
+                        for(loop = 13;loop < 21;loop++)
+                        {
+                          rdata[i++] = tempData[loop];
+                        } 
+                        res =  FlashProgram(rdata,configPageAddress,128);
+                        if( res== 0)
+                        {
+                            sprintf((char*)temp,"%s","<SP,0>");
+                            //cipher(ENCRYPT,key,temp);
+                            CreateShares(temp,96,tempData2,(tempData2+96));
+                            base64_encode(edata,262,tempData2,192);
+                            printf("%s",edata);
+                            printf("\r\n");
+                        }else{
+                          FlashProgram(rdata,configPageAddress,128);
+                          sprintf((char*)temp,"%s","<SP,1>");
+                          //cipher(ENCRYPT,key,temp);
+                          CreateShares(temp,96,tempData2,(tempData2+96));
+                          base64_encode(edata,262,tempData2,192);
+                          printf("%s",edata);
+                          printf("\r\n");
+                        }
+                      }else{
+                        FlashProgram(rdata,configPageAddress,128);
+                        sprintf((char*)temp,"%s","<SP,1>");
+                        //cipher(ENCRYPT,key,temp);
+                        CreateShares(temp,96,tempData2,(tempData2+96));
+                        base64_encode(edata,262,tempData2,192);
+                        printf("%s",edata);
+                        printf("\r\n");
+                      }    
+                                  
+                    break;
+                    default:
+                    //cc26xx_uart_set_input()
+                    break;
+                  }
+                 
+                }else{
+                  FlashProgram(rdata, configPageAddress,128);
+                }
+              break;
+              case 'G':
+                switch(tempData[2])
+                {
+                  memset(rdata,0,128);
+                  memset(edata,0,130);
+                  case 'K':
+                      rdata[0] = '<';
+                      rdata[1] = 'G';
+                      rdata[2] = 'K';
+                      rdata[3] = ',';
+                      FlashRead((rdata+4),(configPageAddress+0x1C),64);
+                      rdata[69] = '>';
+                      //cipher(ENCRYPT,key,rdata);
+                      //base64_encode(edata,130,rdata,96);
+                      CreateShares(rdata,96,tempData2,(tempData2+96));
+                      base64_encode(edata,262,tempData2,192);
+                      printf("%s",edata);
+                      printf("\r\n");
+                  break;
+                  case 'U':
+                      rdata[0] = '<';
+                      rdata[1] = 'G';
+                      rdata[2] = 'U';
+                      rdata[3] = ',';
+                      FlashRead((rdata+4),(configPageAddress+0x0C),16);
+                      rdata[20] = '>';
+                      //cipher(ENCRYPT,key,rdata);
+                     // base64_encode(edata,130,rdata,96);
+                      CreateShares(rdata,96,tempData2,(tempData2+96));
+                      base64_encode(edata,262,tempData2,192);
+                      printf("%s",edata);
+                      printf("\r\n");                      
+                break;
+                case 'P':
+                      rdata[0] = '<';
+                      rdata[1] = 'G';
+                      rdata[2] = 'P';
+                      rdata[3] = ',';
+                      FlashRead((rdata+4),(configPageAddress+0x04),8);
+                      rdata[12] = '>';
+                      //cipher(ENCRYPT,key,rdata);
+                      //base64_encode(edata,130,rdata,96);
+                      CreateShares(rdata,96,tempData2,(tempData2+96));
+                      base64_encode(edata,262,tempData2,192);
+                      printf("%s",edata);
+                      printf("\r\n");
+                break;
+                default:
+                break;
+                }
+              break;
+              case 'V':
+
+               if(tempData[2] == 'P')
+                {
+                  i = 0;
+                  memset(pwdRead,0x00,10);
+                  memset(tempwd,0x00,10);
+                  memset(temp,0,96);
+                  for(loop = 4;loop < 12;loop++)
+                  {
+                    tempwd[loop-4] = tempData[loop];
+                  }
+                  FlashRead(pwdRead,(configPageAddress+0x04),8);
+                  if(memcmp(tempwd,pwdRead,8) == 0)
+                  {
+                    pflag = 1;
+                    sprintf((char*)temp,"%s","<VP,0>");
+                    CreateShares(temp,96,tempData2,(tempData2+96));
+                    //cipher(ENCRYPT,key,temp);
+                    base64_encode(edata,262,tempData2,192);
+                    printf("%s",edata);
+                    printf("\r\n");
+                  }
+                  else{
+                    pflag =0 ;
+                    sprintf((char*)temp,"%s","<VP,1>");
+                    //cipher(ENCRYPT,key,temp);
+                    CreateShares(temp,96,tempData2,(tempData2+96));
+                    base64_encode(edata,262,tempData2,192);
+                    printf("%s",edata);
+                    printf("\r\n");
+                  }
+                }else{
+
+                }
+              break;
+              default:
+              break;
+          }
+        }else{
+
+        }
+        #endif
+    }
+    
   }
 
   PROCESS_END();
