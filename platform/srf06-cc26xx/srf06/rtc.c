@@ -134,6 +134,7 @@
 #define MONTH_ALARM_MASK            0x1F
 #define WEEKDAY_ALARM_MASK          0x07
 static uint8_t buffer[32];
+
 /*---------------------------------------------------------------------------*/
 /**
  * \brief Select the sensor on the I2C bus
@@ -158,6 +159,28 @@ bool common_write_reg(uint8_t addr, uint8_t *buf, uint8_t len)
   /* Send data */
   return board_i2c_write(buffer, len);
 }
+
+bool rtc_get_DateTime(uint8_t *buf,uint8_t len)
+{
+  bool success;
+  uint8_t temp[8];
+  board_i2c_select(BOARD_I2C_INTERFACE_0, RTC_I2C_ADDRESS);
+  success =  common_read_reg(REG_HUNDRETH, temp,len);
+  if(success)
+  {
+    buf[0] = (temp[REG_DATE] & DATE_MASK);
+    buf[1] = (temp[REG_MONTH] & MONTH_MASK) ;
+    buf[2] = 0x20;
+    buf[3] = (temp[REG_YEAR] & YEAR_MASK) ;
+    buf[4] = (temp[REG_HOUR] & HOUR_24_MASK);
+    buf[5] = (temp[REG_MINUTE] & MINUTE_MASK);
+    buf[6] = (temp[REG_SECOND] & SECOND_MASK);
+  }else{
+    memset(buf,0x00,len);
+  }
+ return success;
+}
+
 bool rtc_read_ids( uint8_t *buf, uint8_t len)
 {
   bool success;

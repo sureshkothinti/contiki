@@ -110,8 +110,19 @@
 #include <stdio.h>
 #include <stdint.h>
 
+struct rtc_time {
+  uint8_t tm_sec;
+  uint8_t tm_min;
+  uint8_t tm_hour;
+  uint8_t tm_day;
+  uint8_t tm_mon;
+  uint8_t year[2];
+  uint16_t tm_year;
+ 
+};
 /*---------------------------------------------------------------------------*/
 static struct etimer et;
+
 /*---------------------------------------------------------------------------*/
 PROCESS(cc26xx_demo_process, "cc26xx demo process");
 AUTOSTART_PROCESSES(&cc26xx_demo_process);
@@ -119,7 +130,7 @@ AUTOSTART_PROCESSES(&cc26xx_demo_process);
 
 #define ENCRYPT 1
 #define DECRYPT 0
-
+//time_t time;
 void FlashRead(uint8_t *pui8DataBuffer,uint32_t ui32Address,uint32_t ui32Count)
 {
   uint8_t *pui8ReadAdress =(uint8_t *)ui32Address;
@@ -139,38 +150,72 @@ void WriteConfigData(uint32_t addr)
   res = memcmp(buf,data,4);
   if(res != 0 ) {
     strcpy(data+4,"11223344");
-    strcpy(data+12,"UNK 180820168872");
+    strcpy(data+12,"UNK 241220169000");
     strcpy(data+28,"B374A26A71490437AA024E4FADD5B497FDFF1A8EA6FF12F6FB65AF2720B59CCF");
+    strcpy(data+92,"26122016204100");
     FlashProgram((uint8_t *)data,addr,128);
     CPUdelay(10000);
   } 
 }
-unsigned char key[32] = { 0x3e, 0xc8, 0x7b, 0x95, 0x59, 0xc1, 0x21, 0x1f, 
-                          0x6c, 0xa6, 0x55, 0x0a, 0x99, 0xf3, 0xc9, 0xfd, 
-                          0x64, 0xb3, 0x3f, 0xa5, 0x57, 0x2a, 0x0f, 0x61, 
-                          0xf4, 0x66, 0x67, 0xc0, 0xbb, 0x6d, 0x98, 0x85 };
 
-int cipher(uint8_t type, uint8_t *key, uint8_t *buff)
+unsigned char Ascii_To_Hex(unsigned char *str)
 {
-	int i;
-	aes256_context ctx;
-	aes256_init(&ctx, key);
-	if (type == ENCRYPT)
-	{
-		for (i = 0; i < 96/ 16; i++)
-		{
 
-			aes256_encrypt_ecb(&ctx, buff  + i * 16);
-		}
-	}
-	else {
-		for (i = 0; i < 96 / 16; i++)
-		{
-			aes256_decrypt_ecb(&ctx, buff + i * 16);
-		}
-	}
-	aes256_done(&ctx);
-	return 0;
+	unsigned char res;
+	res = (((str[0] - 0x30) << 4) + (str[1] - 0x30));
+ // printf("%c,%c,%x",str[0],str[1],res);
+	return res;
+}
+void Hex_To_Ascii(uint16_t byte,uint8_t *buff){
+
+	
+	buff[0]= (byte/10)+0x30;
+	buff[1]= (byte%10)+0x30;
+	return;
+}
+int16_t month(uint8_t a,uint8_t yy);
+uint8_t mon[12]={31,28,31,30,31,30,31,31,30,31,30,31};
+int16_t days(uint8_t y1,uint8_t y2,uint8_t m1,uint8_t m2,uint8_t d1,uint8_t d2)
+{
+  int16_t count=0,i;
+  for(i = y1; i < y2;i++)
+  {
+    if(i%4==0)
+    {
+      count+=366;
+    }else{
+      count+=365;
+    }
+  }
+    count-=month(m1,y1);
+    count-=d1;
+    count+=month(m2,y2);
+    count+=d2;
+  /*if(count<0)
+  count=count*-1;*/
+  //printf("The no. of days b/w the 2 dates = %d days",count);
+  return count;
+}
+
+int16_t month(uint8_t a,uint8_t yy)
+{
+  int16_t x=0,c;
+  for(c = 0;c < (a-1);c++)
+  {
+    if(c==1)
+    {
+      if(yy%4 == 0)
+      {
+        x+=29;
+      }
+      else{
+        x+=28;
+      }
+    }else{
+      x+=mon[c];
+    }
+  }
+  return(x);
 }
 uint8_t tempData[96];
 uint8_t tempData2[192];
@@ -179,20 +224,22 @@ uint8_t pwdRead[10];
 uint8_t temp[96];
 uint8_t rdata[128];
 char edata[270]; //130
+ uint8_t time[12];
 /*---------------------------------------------------------------------------*/
 PROCESS_THREAD(cc26xx_demo_process, ev, data)
 {
  
  uint8_t  loop = 0;
-
+ struct rtc_time ctime,ltime;
  uint8_t  i =0;
  uint32_t res;
+ int16_t ret = 0;
  static uint8_t  pflag = 0;
  size_t decodeLen= 264;
  uint32_t configPageAddress = (unsigned int )0x1E000;
- uint8_t buff[4];
- uint8_t time[3];
- uint8_t date,month,year;
+ //uint8_t buff[4];
+
+ uint8_t date,month,year,hour,minutes,seconds;
   PROCESS_BEGIN();
   
   WriteConfigData(configPageAddress);
@@ -200,50 +247,22 @@ PROCESS_THREAD(cc26xx_demo_process, ev, data)
   cc26xx_uart_set_input(serial_line_input_byte);
   memset(tempData,0,96);
   memset(tempData2,0,192);
-   memset(edata,0,270);
-   etimer_set(&et, CLOCK_SECOND);
+  memset(edata,0,270);
+  etimer_set(&et, CLOCK_SECOND);
   while(1) {
 
     PROCESS_YIELD();
     if(ev ==PROCESS_EVENT_TIMER )
     {
-      rtc_get_date(&date,1);
-      rtc_get_month(&month,1);
-      rtc_get_year(&year,1);
-      printf("%x/%x/%x ",date,month,year);
-      rtc_get_time(time,3);
-       printf("%x:%x:%x\n",time[2],time[1],time[0]);
-       etimer_set(&et, CLOCK_SECOND);
+      rtc_get_DateTime(time,8);
+      printf("%02x/%02x/20%02x %02x:%02x:%02x\n",time[0],time[1],time[3],time[4],time[5],time[6]);
+      etimer_set(&et, CLOCK_SECOND);
     }
 
     if(ev == serial_line_event_message) {
-      /*rtc_read_ids(buff,6);
-      printf("ID %x %x %x %x %x %x",buff[0],buff[1],buff[2],buff[3],buff[4],buff[5]);*/ 
-      
-      rtc_set_date(0x23,1);
-      rtc_set_month(0x12,1);
-      rtc_set_year(0x16,1);
-      rtc_set_seconds(0x00,1);
-      rtc_set_minutes(0x05,1);
-      rtc_set_hours(0x18,1);
-      rtc_read_status_reg(buff,1);
-      printf("%x\n",buff[0]);
-             /*printf("success");
-       res = ext_flash_open();
-       if(res)
-       {
-         printf("part ok");
-       }else{
-         printf("part fail");
-       }
-       res = ext_flash_write(0x00, 4, "test");
-       if(res)
-       {
-         printf("flash write successful\n");
-         res = ext_flash_read(0x00,4,buff);
-         printf("%s\n",buff);
-       }*/
-        #if 0
+
+
+       //#if 0
         strcpy(edata,data);
         base64_decode(tempData2, &decodeLen,edata,strlen(edata));
         JoinShares(tempData,96,tempData2,(tempData2+96));
@@ -372,6 +391,92 @@ PROCESS_THREAD(cc26xx_demo_process, ev, data)
                       }    
                                   
                     break;
+                    case 'T':
+                      memset(temp,0,96);
+                      memset(edata,0,130);
+                      if(pflag){
+                       // i = 92;
+                        date = Ascii_To_Hex(&tempData[4]);
+                        rtc_set_date(date,1);
+                        month = Ascii_To_Hex(&tempData[6]);
+                        rtc_set_month(month,1);
+                        year = Ascii_To_Hex(&tempData[10]);
+                        rtc_set_year(year,1);
+                        hour = Ascii_To_Hex(&tempData[12]);
+                        rtc_set_hours(hour,1);
+                        minutes = Ascii_To_Hex(&tempData[14]);
+                        rtc_set_minutes(minutes,1);
+                        seconds = Ascii_To_Hex(&tempData[16]);
+                        rtc_set_seconds(seconds,1);
+                        /*for(loop = 4; tempData[loop] != '>'; loop++)
+                        {
+                        
+                          rdata[i++] = tempData[loop];
+                        }*/
+                        res = FlashProgram(rdata, configPageAddress,128);
+                        CPUdelay(1000);
+                        if( res== 0)
+                        {
+                          sprintf((char*)temp,"%s","<ST,0>");
+                          //cipher(ENCRYPT,key,temp);
+                          CreateShares(temp,96,tempData2,(tempData2+96));
+                          base64_encode(edata,262,tempData2,192);
+                          printf("%s",edata);
+                          printf("\r\n");
+                        }else{
+                          sprintf((char*)temp,"%s","<ST,2>");
+                          //cipher(ENCRYPT,key,temp);
+                          CreateShares(temp,96,tempData2,(tempData2+96));
+                          base64_encode(edata,262,tempData2,192);
+                          printf("%s",edata);
+                          printf("\r\n");
+                        } 
+                      }else{
+                          sprintf((char*)temp,"%s","<ST,1>");
+                          //cipher(ENCRYPT,key,temp);
+                          CreateShares(temp,96,tempData2,(tempData2+96));
+                          base64_encode(edata,262,tempData2,192);
+                          printf("%s",edata);
+                          printf("\r\n");
+                      }                    
+                    break;
+                    case 'L':
+                      memset(temp,0,96);
+                      memset(edata,0,130);
+                      if(pflag){
+                        i = 92;
+                        for(loop = 4; tempData[loop] != '>'; loop++)
+                        {
+                        
+                          rdata[i++] = tempData[loop];
+                        }
+                        res = FlashProgram(rdata, configPageAddress,128);
+                        CPUdelay(1000);
+                        if( res== 0)
+                        {
+                          sprintf((char*)temp,"%s","<SL,0>");
+                          //cipher(ENCRYPT,key,temp);
+                          CreateShares(temp,96,tempData2,(tempData2+96));
+                          base64_encode(edata,262,tempData2,192);
+                          printf("%s",edata);
+                          printf("\r\n");
+                        }else{
+                          sprintf((char*)temp,"%s","<SL,2>");
+                          //cipher(ENCRYPT,key,temp);
+                          CreateShares(temp,96,tempData2,(tempData2+96));
+                          base64_encode(edata,262,tempData2,192);
+                          printf("%s",edata);
+                          printf("\r\n");
+                        } 
+                      }else{
+                          sprintf((char*)temp,"%s","<SL,1>");
+                          //cipher(ENCRYPT,key,temp);
+                          CreateShares(temp,96,tempData2,(tempData2+96));
+                          base64_encode(edata,262,tempData2,192);
+                          printf("%s",edata);
+                          printf("\r\n");
+                      }                    
+                    break;
                     default:
                     //cc26xx_uart_set_input()
                     break;
@@ -428,44 +533,98 @@ PROCESS_THREAD(cc26xx_demo_process, ev, data)
                       printf("%s",edata);
                       printf("\r\n");
                 break;
+                case 'L':
+                      rdata[0] = '<';
+                      rdata[1] = 'G';
+                      rdata[2] = 'L';
+                      rdata[3] = ',';
+                      FlashRead((rdata+4),(configPageAddress+0x5C),14);
+                      rdata[18] = '>';
+                      //cipher(ENCRYPT,key,rdata);
+                      //base64_encode(edata,130,rdata,96);
+                      CreateShares(rdata,96,tempData2,(tempData2+96));
+                      base64_encode(edata,262,tempData2,192);
+                      printf("%s",edata);
+                      printf("\r\n");                    
+                break;
                 default:
                 break;
                 }
               break;
               case 'V':
-
-               if(tempData[2] == 'P')
+               switch(tempData[2])
                 {
                   i = 0;
-                  memset(pwdRead,0x00,10);
-                  memset(tempwd,0x00,10);
+                  memset(pwdRead,0x00,14);
+                  memset(tempwd,0x00,14);
                   memset(temp,0,96);
-                  for(loop = 4;loop < 12;loop++)
-                  {
-                    tempwd[loop-4] = tempData[loop];
-                  }
-                  FlashRead(pwdRead,(configPageAddress+0x04),8);
-                  if(memcmp(tempwd,pwdRead,8) == 0)
-                  {
-                    pflag = 1;
-                    sprintf((char*)temp,"%s","<VP,0>");
-                    CreateShares(temp,96,tempData2,(tempData2+96));
-                    //cipher(ENCRYPT,key,temp);
-                    base64_encode(edata,262,tempData2,192);
-                    printf("%s",edata);
-                    printf("\r\n");
-                  }
-                  else{
-                    pflag =0 ;
-                    sprintf((char*)temp,"%s","<VP,1>");
-                    //cipher(ENCRYPT,key,temp);
-                    CreateShares(temp,96,tempData2,(tempData2+96));
-                    base64_encode(edata,262,tempData2,192);
-                    printf("%s",edata);
-                    printf("\r\n");
-                  }
-                }else{
-
+                  case 'P':
+                    for(loop = 4;loop < 12;loop++)
+                    {
+                      tempwd[loop-4] = tempData[loop];
+                    }
+                    FlashRead(pwdRead,(configPageAddress+0x04),8);
+                    if(memcmp(tempwd,pwdRead,8) == 0)
+                    {
+                      pflag = 1;
+                      sprintf((char*)temp,"%s","<VP,0>");
+                      CreateShares(temp,96,tempData2,(tempData2+96));
+                      //cipher(ENCRYPT,key,temp);
+                      base64_encode(edata,262,tempData2,192);
+                      printf("%s",edata);
+                      printf("\r\n");
+                    }
+                    else{
+                      pflag =0 ;
+                      sprintf((char*)temp,"%s","<VP,1>");
+                      //cipher(ENCRYPT,key,temp);
+                      CreateShares(temp,96,tempData2,(tempData2+96));
+                      base64_encode(edata,262,tempData2,192);
+                      printf("%s",edata);
+                      printf("\r\n");
+                    }
+                  break;
+                  case 'L':
+                    FlashRead(pwdRead,(configPageAddress+0x5C),14);
+                    ltime.tm_day = Ascii_To_Hex(&pwdRead[0]);
+                    ltime.tm_mon = Ascii_To_Hex(&pwdRead[2]);
+                    ltime.tm_year = Ascii_To_Hex(&pwdRead[6]);
+                    ltime.tm_hour = Ascii_To_Hex(&pwdRead[8]);
+                    ltime.tm_min = Ascii_To_Hex(&pwdRead[10]);
+                    ltime.tm_sec = Ascii_To_Hex(&pwdRead[12]);
+                    rtc_get_DateTime(time,8);
+                    ctime.tm_day = time[0];
+                    ctime.tm_mon = time[1];
+                    ctime.tm_year = time[3];
+                    ctime.tm_hour = time[4];
+                    ctime.tm_min = time[5];
+                    ctime.tm_sec = time[6];
+                    if(ctime.tm_year >= ltime.tm_year)
+                    {
+                      ret = days(ctime.tm_year,ltime.tm_year,ctime.tm_mon,ltime.tm_mon,ctime.tm_day,ltime.tm_day);
+                    }else{
+                      ret = days(ltime.tm_year,ctime.tm_year,ltime.tm_mon,ctime.tm_mon,ltime.tm_day,ctime.tm_day);
+                    }
+                    if(ret >= 0)
+                    {
+                     
+                      sprintf((char*)temp,"%s","<VL,0>");
+                      CreateShares(temp,96,tempData2,(tempData2+96));
+                      //cipher(ENCRYPT,key,temp);
+                      base64_encode(edata,262,tempData2,192);
+                      printf("%s",edata);
+                      printf("\r\n");
+                    }
+                    else{
+                      
+                      sprintf((char*)temp,"%s","<VL,1>");
+                      //cipher(ENCRYPT,key,temp);
+                      CreateShares(temp,96,tempData2,(tempData2+96));
+                      base64_encode(edata,262,tempData2,192);
+                      printf("%s",edata);
+                      printf("\r\n");
+                    }
+                  break;
                 }
               break;
               default:
@@ -474,7 +633,7 @@ PROCESS_THREAD(cc26xx_demo_process, ev, data)
         }else{
 
         }
-        #endif
+ //       #endif
     }
     
   }
